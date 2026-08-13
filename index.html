@@ -552,7 +552,10 @@ async function fetchInvoiceNumber(action){
   if(SHEET_WEBHOOK_URL && SHEET_WEBHOOK_URL.indexOf('PASTE_YOUR') !== 0){
     try{
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      // 15s — comfortably longer than the Apps Script side's own 10s lock wait,
+      // so a busy moment (e.g. two of you saving invoices seconds apart) never
+      // gets mistaken for a dead connection and falls back to random.
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
       const res = await fetch(`${SHEET_WEBHOOK_URL}?action=${action}&date=${ymd}`, { signal: controller.signal });
       clearTimeout(timeoutId);
       const data = await res.json();
@@ -560,7 +563,9 @@ async function fetchInvoiceNumber(action){
         seq = data.number;
       }
     } catch(err){
-      // fetch failed or timed out — fall through to random fallback below
+      // fetch failed or timed out — fall through to random fallback below.
+      // Logged so it's easy to diagnose in the browser console (F12) if this happens again.
+      console.warn(`Vanamalya invoice numbering: ${action} request failed, using random fallback.`, err);
     }
   }
 
