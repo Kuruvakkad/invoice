@@ -426,7 +426,7 @@
 
     <div class="action-row">
       <button class="btn btn-secondary" id="newInvBtn" onclick="newInvoiceNumber()">New Invoice #</button>
-      <button class="btn btn-primary" onclick="saveAndPrint()">Save to Sheet & Print PDF</button>
+      <button class="btn btn-primary" id="saveBtn" onclick="saveAndPrint()">Save to Sheet & Print PDF</button>
     </div>
     <div class="action-row">
       <button class="btn btn-secondary" style="flex:1" onclick="shareOnWhatsApp()">Share Summary on WhatsApp</button>
@@ -543,6 +543,7 @@ function currentDateKey(){
  * action = 'peekInvoiceNumber' (read-only, safe to call any number of times)
  * action = 'nextInvoiceNumber' (reserves/consumes the number for real)
  * Falls back to a random 3-digit suffix if the Sheet isn't configured or unreachable.
+ * Has an 8-second timeout so a hung request can never leave a button stuck.
  */
 async function fetchInvoiceNumber(action){
   const ymd = currentDateKey();
@@ -550,13 +551,16 @@ async function fetchInvoiceNumber(action){
 
   if(SHEET_WEBHOOK_URL && SHEET_WEBHOOK_URL.indexOf('PASTE_YOUR') !== 0){
     try{
-      const res = await fetch(`${SHEET_WEBHOOK_URL}?action=${action}&date=${ymd}`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const res = await fetch(`${SHEET_WEBHOOK_URL}?action=${action}&date=${ymd}`, { signal: controller.signal });
+      clearTimeout(timeoutId);
       const data = await res.json();
       if(data && typeof data.number === 'number'){
         seq = data.number;
       }
     } catch(err){
-      // fetch failed — fall through to random fallback below
+      // fetch failed or timed out — fall through to random fallback below
     }
   }
 
@@ -570,17 +574,29 @@ async function fetchInvoiceNumber(action){
   return `VNM-${ymd}-${padded}`;
 }
 
+let isPeeking = false;
+
 // Bound to "New Invoice #" and called once on page load.
 // Uses PEEK — never consumes/reserves a number, so refreshing or clicking this
 // repeatedly is completely harmless and never skips numbers.
+// Also re-arms the Save button, so this is how you start billing a fresh invoice.
 async function newInvoiceNumber(){
+  if(isPeeking) return; // ignore rapid repeat clicks while one is already in flight
+  isPeeking = true;
   const btn = document.getElementById('newInvBtn');
-  if(btn) btn.disabled = true;
+  if(btn){ btn.disabled = true; btn.textContent = '...'; }
   try{
     const invNum = await fetchInvoiceNumber('peekInvoiceNumber');
     document.getElementById('pInvNum').textContent = invNum;
   } finally {
-    if(btn) btn.disabled = false;
+    if(btn){ btn.disabled = false; btn.textContent = 'New Invoice #'; }
+    isPeeking = false;
+    // Starting fresh — re-arm the Save button and clear any prior status message.
+    hasSavedThisInvoice = false;
+    const saveBtn = document.getElementById('saveBtn');
+    if(saveBtn) saveBtn.disabled = false;
+    const statusEl = document.getElementById('saveStatus');
+    if(statusEl) statusEl.textContent = '';
   }
 }
 
@@ -684,8 +700,17 @@ function logInvoiceToSheet(){
   });
 }
 
+let hasSavedThisInvoice = false;
+
 async function saveAndPrint(){
   const statusEl = document.getElementById('saveStatus');
+  const saveBtn = document.getElementById('saveBtn');
+
+  // Guard against double-clicks / accidental second presses — once a save is
+  // in progress or has already completed for this invoice, further clicks do
+  // nothing until "New Invoice #" is clicked to start a fresh one.
+  if(hasSavedThisInvoice || (saveBtn && saveBtn.disabled)) return;
+
   const name = document.getElementById('custName').value;
   const address = document.getElementById('custAddress').value;
   if(!name || !address){
@@ -693,6 +718,9 @@ async function saveAndPrint(){
     statusEl.style.color = 'var(--danger)';
     return;
   }
+
+  if(saveBtn) saveBtn.disabled = true;
+  hasSavedThisInvoice = true;
 
   statusEl.textContent = 'Reserving invoice number…';
   statusEl.style.color = 'var(--muted)';
@@ -704,7 +732,7 @@ async function saveAndPrint(){
   statusEl.textContent = 'Saving to sheet…';
   const attempted = await logInvoiceToSheet();
   if(attempted){
-    statusEl.textContent = 'Saved to sheet. Opening print dialog…';
+    statusEl.textContent = 'Saved to sheet. Opening print dialog… (click "New Invoice #" to start another)';
     statusEl.style.color = 'var(--gold)';
   } else {
     statusEl.textContent = 'Sheet logging not set up yet — skipping save. Opening print dialog…';
