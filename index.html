@@ -1112,26 +1112,43 @@
     }
 
     // Removes leading product codes so receipts show only the name.
-    // Handles formats like:
-    //  - "CODE — Name"
-    //  - "CODE - Name"
-    //  - "CODE, Name"
-    //  - "CODE Name" (where CODE is alphanumeric with dashes/underscores)
+    // Only strips when the left token clearly looks like a code (contains digits,
+    // has dash+digits, or is a short uppercase token). This avoids removing
+    // genuine names like "Kashu Coin Necklace".
     function stripProductCode(name) {
       if (!name) return name;
       const s = String(name).trim();
-      // If a clear separator exists, split on the first separator and take the latter part.
-      const sepMatch = s.match(/\s[—\-–:,]+\s|\s[—\-–]\s/);
-      if (sepMatch) {
-        // split on first em/ en dash, hyphen, colon or comma sequence
-        const parts = s.split(/\s[—\-–:,]+\s|\s[—\-–]\s/);
-        if (parts.length > 1) return parts.slice(1).join(' ').trim();
+
+      function looksLikeCode(token) {
+        if (!token) return false;
+        // If it contains a digit, very likely a code (e.g. NCK-001)
+        if (/[0-9]/.test(token)) return true;
+        // Typical code patterns with dash/underscore
+        if (/^[A-Z0-9]+[-_\/][A-Z0-9]+$/i.test(token)) return true;
+        // Short all-uppercase token (e.g. "SKU", "VM") of length <=4
+        if (token.length <= 4 && token === token.toUpperCase()) return true;
+        return false;
       }
-      // Otherwise, if the string starts with a code-like token (alnum and -_/.)
-      // followed by whitespace or punctuation, strip that leading token.
-      const m = s.match(/^[\s]*[A-Za-z0-9]+[A-Za-z0-9\-_.\/]*[\s,:\-–—]+(.+)$/);
-      if (m && m[1]) return m[1].trim();
-      // Fallback: return original trimmed string.
+
+      // If there's an explicit separator like "—", "-", ":" or ",",
+      // consider splitting but only strip if the left part looks like a code.
+      const sepRegex = /\s[—\-–:,]+\s|\s[—\-–]\s/;
+      if (sepRegex.test(s)) {
+        const parts = s.split(sepRegex);
+        if (parts.length > 1) {
+          const left = parts[0].trim();
+          if (looksLikeCode(left) || (left.length <= 6 && /[0-9]/.test(left))) {
+            return parts.slice(1).join(' ').trim();
+          }
+        }
+      }
+
+      // No explicit separator — check first token for code-like shape.
+      const first = s.split(/\s+/)[0];
+      if (looksLikeCode(first)) {
+        return s.split(/\s+/).slice(1).join(' ').trim();
+      }
+
       return s;
     }
 
